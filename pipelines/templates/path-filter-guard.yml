@@ -1,0 +1,55 @@
+# Steps template: calculate the scope of one pipeline, print the path filters it needs, and fail
+# when its YAML trigger or branch policy path filter does not match its dependencies.
+#
+# Use it in every pipeline that builds a .NET project, before restore and build:
+#
+#   steps:
+#   - template: templates/path-filter-guard.yml
+#     parameters:
+#       projectFile: 'src/Orders/Api/Orders.Api.csproj'
+#       pipelineFile: 'pipelines/orders-api.yml'
+#
+# 'projectFile:' on its own line is also how Test-AllPathFilters.ps1 discovers the pipeline, so keep
+# the parameter name in sync with 'projectParameter' in path-filters.json.
+
+parameters:
+- name: projectFile
+  type: string
+- name: pipelineFile
+  type: string
+- name: scriptsFolder
+  type: string
+  default: 'build/path-filter-guard'
+- name: policyBranch
+  displayName: Branch whose build validation policy to check; empty means the pull request target or the built branch
+  type: string
+  default: ''
+- name: allowSuperfluous
+  type: boolean
+  default: false
+
+steps:
+- task: PowerShell@2
+  displayName: 'Path filters: calculate scope'
+  inputs:
+    pwsh: true
+    filePath: '$(Build.SourcesDirectory)/${{ parameters.scriptsFolder }}/Initialize-Scope.ps1'
+    arguments: >-
+      -ProjectFile '${{ parameters.projectFile }}'
+      -PipelineFile '${{ parameters.pipelineFile }}'
+      -WorkingDirectory '$(Build.SourcesDirectory)'
+
+- task: PowerShell@2
+  displayName: 'Path filters: validate YAML trigger and branch policy'
+  inputs:
+    pwsh: true
+    filePath: '$(Build.SourcesDirectory)/${{ parameters.scriptsFolder }}/Test-PathFilters.ps1'
+    arguments: >-
+      -ProjectFile '${{ parameters.projectFile }}'
+      -PipelineFile '${{ parameters.pipelineFile }}'
+      -BuildDefinitionId '$(System.DefinitionId)'
+      -WorkingDirectory '$(Build.SourcesDirectory)'
+      -PolicyBranch '${{ parameters.policyBranch }}'
+      -AllowSuperfluous:$${{ parameters.allowSuperfluous }}
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)

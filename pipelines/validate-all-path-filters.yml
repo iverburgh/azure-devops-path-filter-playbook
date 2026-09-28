@@ -1,0 +1,37 @@
+# Gate pipeline: validates the path filters of EVERY .NET pipeline in the repository.
+#
+# A pipeline's own validation only runs when its filters trigger it. A test project that starts
+# referencing a project, a moved folder or a removed reference can make another pipeline's filters
+# wrong without triggering that pipeline. This pipeline catches those changes.
+#
+# It has no CI trigger. Attach it as build validation on your integration branch, required, with
+# this path filter (adapt the folders to yours):
+#
+#   *.csproj; *.props; *.targets; /build/path-filter-guard/*; /pipelines/*
+#
+# See docs/the-gate-pipeline.md.
+
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- checkout: self
+  fetchDepth: 1
+
+- task: UseDotNet@2
+  displayName: 'Install .NET SDK from global.json'
+  inputs:
+    packageType: sdk
+    useGlobalJson: true
+
+- task: PowerShell@2
+  displayName: 'Validate path filters of all pipelines'
+  inputs:
+    pwsh: true
+    filePath: '$(Build.SourcesDirectory)/build/path-filter-guard/Test-AllPathFilters.ps1'
+    arguments: >-
+      -WorkingDirectory '$(Build.SourcesDirectory)'
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)

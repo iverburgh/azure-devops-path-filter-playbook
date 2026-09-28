@@ -1,0 +1,19 @@
+{
+  "_comment": "Settings for the path filter guard. Every setting is optional; delete what you do not need. See docs/configuration.md.",
+  "testProjectPattern": "(?i)tests?\\.csproj$",
+  "excludedTestPaths": [],
+  "testSupportPaths": [],
+  "ignoredReferences": [],
+  "alwaysInScopeProjects": [],
+  "requiredPaths": [
+    "{pipelineFile}",
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+    "global.json"
+  ],
+  "allowedExtraPaths": [],
+  "projectParameter": "projectFile",
+  "excludedPipelinePaths": [],
+  "pipelines": []
+}

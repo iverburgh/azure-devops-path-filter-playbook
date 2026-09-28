@@ -1,0 +1,56 @@
+# Example application pipeline. The trigger paths below show what Initialize-Scope.ps1 prints for a
+# project 'Orders.Api' that references 'Orders.Application' and 'Orders.Domain', covered by two test
+# projects. Replace them with the output for your own project.
+
+trigger:
+  batch: true
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - 'src/Orders/Api/**'
+    - 'src/Orders/Application/**'
+    - 'src/Orders/Domain/**'
+    - 'tests/Orders.Api.Tests/**'
+    - 'tests/Orders.Domain.Tests/**'
+    - 'pipelines/orders-api.yml'
+    - 'Directory.Build.props'
+    - 'Directory.Packages.props'
+    - 'global.json'
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  buildConfiguration: Release
+
+steps:
+- checkout: self
+
+- task: UseDotNet@2
+  displayName: 'Install .NET SDK from global.json'
+  inputs:
+    packageType: sdk
+    useGlobalJson: true
+
+- template: templates/path-filter-guard.yml
+  parameters:
+    projectFile: 'src/Orders/Api/Orders.Api.csproj'
+    pipelineFile: 'pipelines/orders-api.yml'
+
+# Initialize-Scope.ps1 sets $(TestProjects): only the tests that cover this project and its dependencies.
+- task: DotNetCoreCLI@2
+  displayName: 'Test'
+  inputs:
+    command: test
+    projects: '$(TestProjects)'
+    arguments: '--configuration $(buildConfiguration)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Publish'
+  inputs:
+    command: publish
+    publishWebProjects: false
+    projects: 'src/Orders/Api/Orders.Api.csproj'
+    arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
