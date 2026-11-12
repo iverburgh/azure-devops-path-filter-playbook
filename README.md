@@ -145,6 +145,8 @@ From the same monorepo, each on its own:
 - [Domain-Driven Design in .NET](https://github.com/iverburgh/ddd-dotnet-playbook) — bounded
   contexts with their own projects and dependencies: the structure that makes per-context path
   filters possible.
+- [Entra ID app registrations as code](https://github.com/iverburgh/entra-app-registrations-as-code-playbook) —
+  app registrations, roles and access as code, applied by a pipeline like the ones here.
 
 ## License
 
