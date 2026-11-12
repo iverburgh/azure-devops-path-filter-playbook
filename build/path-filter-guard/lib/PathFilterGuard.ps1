@@ -13,9 +13,11 @@
 Set-StrictMode -Version Latest
 
 $script:BuildValidationPolicyType = '0609b952-1397-4640-95ec-e00a01b2c241'
+$script:ScanProjectFile = Join-Path $PSScriptRoot 'ScanProjectReferences.proj'
 $script:ReferenceCache = @{}
 $script:RepositoryFileCache = @{}
 $script:FolderIndexCache = @{}
+$script:PathCasingCache = @{}
 
 #region Configuration and paths
 
@@ -113,6 +115,7 @@ function Clear-PathFilterCache {
     $script:ReferenceCache = @{}
     $script:RepositoryFileCache = @{}
     $script:FolderIndexCache = @{}
+    $script:PathCasingCache = @{}
 }
 
 function Get-RepositoryFile {
@@ -177,6 +180,29 @@ function Get-FileUnder {
     @()
 }
 
+function Resolve-RepoPathCasing {
+    <#
+    .SYNOPSIS
+        A repository file path with the casing the repository has for it. YAML trigger paths are
+        case-sensitive, so a printed filter must not copy the casing someone typed in a ProjectReference.
+    #>
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $Root
+    )
+
+    $key = [IO.Path]::GetFullPath($Root)
+    if (-not $script:PathCasingCache.ContainsKey($key)) {
+        $map = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($file in Get-RepositoryFile -Root $Root) { $map[$file] = $file }
+        $script:PathCasingCache[$key] = $map
+    }
+
+    $actual = $null
+    if ($script:PathCasingCache[$key].TryGetValue($Path, [ref] $actual)) { return $actual }
+    $Path
+}
+
 #endregion
 
 #region Project scope
@@ -191,81 +217,100 @@ function Get-DirectProjectReference {
     .SYNOPSIS
         Direct project references of one project, as evaluated by MSBuild (so references added in
         Directory.Build.props are included), as repository-relative paths.
+
+    .DESCRIPTION
+        The first call reads every project in the repository with one MSBuild run; later calls are
+        answered from that cache.
     #>
     param(
         [Parameter(Mandatory)][string] $Project,
         [Parameter(Mandatory)][string] $Root
     )
 
-    $projectFile = [IO.Path]::GetFullPath($Project, $Root)
-    $key = $projectFile.ToLowerInvariant()
-    if ($script:ReferenceCache.ContainsKey($key)) { return $script:ReferenceCache[$key] }
-
-    $output = & dotnet list $projectFile reference 2>&1
-    $global:LASTEXITCODE = 0
-
-    $result = ConvertFrom-DotnetListOutput -Output $output -ProjectFile $projectFile -Root $Root
-    $script:ReferenceCache[$key] = $result
-    $result
+    $key = [IO.Path]::GetFullPath($Project, $Root).ToLowerInvariant()
+    if (-not $script:ReferenceCache.ContainsKey($key)) { $null = Initialize-ReferenceCache -Root $Root }
+    if (-not $script:ReferenceCache.ContainsKey($key)) {
+        Write-Warning "'$(ConvertTo-RepoPath -Path $Project -Root $Root)' is referenced but is not a project file in the repository; it has no references to follow."
+        $script:ReferenceCache[$key] = [string[]]@()
+    }
+    $script:ReferenceCache[$key]
 }
 
-function ConvertFrom-DotnetListOutput {
+function Invoke-ProjectReferenceScan {
     <#
     .SYNOPSIS
-        Parses the output of 'dotnet list <project> reference' into repository-relative paths.
+        Reads the direct project references of many projects with one MSBuild run.
+
+    .DESCRIPTION
+        Runs ScanProjectReferences.proj from the repository root, so global.json selects the SDK.
+        Nothing is restored or built. A project MSBuild cannot evaluate fails the scan: reporting no
+        references for it would silently shrink the scope of every pipeline that depends on it.
+
+        Writes one '<project>|<referenced project>' line per reference, as absolute paths.
     #>
     param(
-        [AllowNull()][object[]] $Output,
-        [Parameter(Mandatory)][string] $ProjectFile,
+        [Parameter(Mandatory)][string[]] $Project,
         [Parameter(Mandatory)][string] $Root
     )
 
-    $projectFolder = Split-Path $ProjectFile -Parent
-    $references = [Collections.Generic.List[string]]::new()
-    foreach ($line in $Output) {
-        if ($line -is [Management.Automation.ErrorRecord]) { continue }
-        $reference = "$line".Trim()
-        if ($reference -notmatch '\.csproj$') { continue }
-
-        # dotnet list prints some evaluated references as '<folder>\\..\<rest>'; they resolve as '..\<rest>' from the project folder.
-        if ($reference -match '^[A-Za-z]:\\.*?\\\\(?<rest>\.\..*)$') {
-            $reference = '..\' + $Matches['rest']
+    $work = Join-Path ([IO.Path]::GetTempPath()) "path-filter-guard-$([guid]::NewGuid().ToString('N'))"
+    $null = New-Item -ItemType Directory -Path $work
+    $listFile = Join-Path $work 'projects.txt'
+    $outputFile = Join-Path $work 'references.txt'
+    try {
+        [IO.File]::WriteAllLines($listFile, $Project)
+        Push-Location -LiteralPath $Root
+        try {
+            $global:LASTEXITCODE = 0
+            $output = & dotnet msbuild $script:ScanProjectFile -t:ScanProjectReferences "-p:ProjectListFile=$listFile" "-p:ScanOutputFile=$outputFile" -nologo -verbosity:quiet -maxCpuCount -nodeReuse:false 2>&1
+            $exitCode = $LASTEXITCODE
         }
-        # Project files use backslashes even on Linux, where GetFullPath would treat them as part of a file name.
-        $reference = $reference.Replace('\', '/')
-        $references.Add((ConvertTo-RepoPath -Path ([IO.Path]::GetFullPath($reference, $projectFolder)) -Root $Root))
-    }
+        finally {
+            Pop-Location
+        }
+        $global:LASTEXITCODE = 0
 
-    , $references.ToArray()
+        if ($exitCode -ne 0) {
+            $message = @($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join [Environment]::NewLine
+            throw "MSBuild could not read the project references (exit code $exitCode). Fix the project(s) below; the scope of a pipeline cannot be trusted while a project cannot be evaluated.$([Environment]::NewLine)$message"
+        }
+        if (Test-Path -LiteralPath $outputFile) {
+            Get-Content -LiteralPath $outputFile | Where-Object { $_ }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Initialize-ReferenceCache {
     <#
     .SYNOPSIS
-        Resolves the references of every project in the repository in parallel, so validating many
-        pipelines does not wait for one 'dotnet list' call at a time.
+        Reads the references of every project in the repository that is not cached yet, with one
+        MSBuild run, and returns how many projects were read.
     #>
     param(
-        [Parameter(Mandatory)][string] $Root,
-        [int] $ThrottleLimit = [Environment]::ProcessorCount
+        [Parameter(Mandatory)][string] $Root
     )
 
     $projects = @(Get-RepositoryFile -Root $Root | Where-Object { $_ -like '*.csproj' } |
-            ForEach-Object { [IO.Path]::GetFullPath($_, $Root) } |
-            Where-Object { -not $script:ReferenceCache.ContainsKey($_.ToLowerInvariant()) })
+            Where-Object { -not $script:ReferenceCache.ContainsKey([IO.Path]::GetFullPath($_, $Root).ToLowerInvariant()) })
+    if ($projects.Count -eq 0) { return 0 }
 
-    if ($ThrottleLimit -le 1) {
-        foreach ($project in $projects) { $null = Get-DirectProjectReference -Project $project -Root $Root }
-        return $projects.Count
+    $references = @{}
+    foreach ($project in $projects) { $references[$project] = [Collections.Generic.List[string]]::new() }
+
+    $fullPaths = [string[]]@($projects | ForEach-Object { [IO.Path]::GetFullPath($_, $Root) })
+    foreach ($line in @(Invoke-ProjectReferenceScan -Project $fullPaths -Root $Root)) {
+        $owner, $reference = $line.Split('|', 2)
+        $ownerPath = Resolve-RepoPathCasing -Path (ConvertTo-RepoPath -Path $owner -Root $Root) -Root $Root
+        $referencePath = Resolve-RepoPathCasing -Path (ConvertTo-RepoPath -Path $reference -Root $Root) -Root $Root
+        if (-not $references.ContainsKey($ownerPath)) { $references[$ownerPath] = [Collections.Generic.List[string]]::new() }
+        if (-not $references[$ownerPath].Contains($referencePath)) { $references[$ownerPath].Add($referencePath) }
     }
 
-    $outputs = $projects | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
-        [pscustomobject]@{ Project = $_; Output = @(& dotnet list $_ reference 2>&1 | ForEach-Object { "$_" }) }
-    }
-    $global:LASTEXITCODE = 0
-
-    foreach ($item in $outputs) {
-        $script:ReferenceCache[$item.Project.ToLowerInvariant()] = ConvertFrom-DotnetListOutput -Output $item.Output -ProjectFile $item.Project -Root $Root
+    foreach ($project in $references.Keys) {
+        $script:ReferenceCache[[IO.Path]::GetFullPath($project, $Root).ToLowerInvariant()] = $references[$project].ToArray()
     }
     $projects.Count
 }
@@ -316,6 +361,7 @@ function Get-ProjectScope {
     if (-not (Test-Path -LiteralPath (Join-Path $Root $Project))) {
         throw "Project '$Project' does not exist under '$Root'."
     }
+    $Project = Resolve-RepoPathCasing -Path $Project -Root $Root
 
     $ignored = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($reference in $Config.ignoredReferences) { $null = $ignored.Add($reference) }
@@ -605,18 +651,28 @@ function New-YamlRule {
     <#
     .SYNOPSIS
         Compiled matching rules for a YAML trigger filter. No include list means everything is included.
+
+    .DESCRIPTION
+        YAML trigger paths are case-sensitive, so Regex is too. LooseRegex ignores case; it is only
+        used to explain a finding when an entry differs from the repository in casing alone.
     #>
     param([Parameter(Mandatory)] $Filter)
 
     $rules = [Collections.Generic.List[object]]::new()
     if ($Filter.Include.Count -eq 0) {
-        $rules.Add([pscustomobject]@{ Raw = '**'; Regex = [regex]::new('^.*$'); Specificity = 0; Exclude = $false; Implicit = $true })
+        $all = [regex]::new('^.*$')
+        $rules.Add([pscustomobject]@{ Raw = '**'; Regex = $all; LooseRegex = $all; Specificity = 0; Exclude = $false; Implicit = $true })
     }
-    foreach ($pattern in $Filter.Include) {
-        $rules.Add([pscustomobject]@{ Raw = $pattern; Regex = [regex]::new((ConvertTo-YamlRegex $pattern), 'IgnoreCase'); Specificity = (Get-LiteralPrefix $pattern).Split('/', [StringSplitOptions]::RemoveEmptyEntries).Count; Exclude = $false; Implicit = $false })
-    }
-    foreach ($pattern in $Filter.Exclude) {
-        $rules.Add([pscustomobject]@{ Raw = $pattern; Regex = [regex]::new((ConvertTo-YamlRegex $pattern), 'IgnoreCase'); Specificity = (Get-LiteralPrefix $pattern).Split('/', [StringSplitOptions]::RemoveEmptyEntries).Count; Exclude = $true; Implicit = $false })
+    foreach ($entry in @($Filter.Include | ForEach-Object { @{ Pattern = $_; Exclude = $false } }) + @($Filter.Exclude | ForEach-Object { @{ Pattern = $_; Exclude = $true } })) {
+        $regex = ConvertTo-YamlRegex $entry.Pattern
+        $rules.Add([pscustomobject]@{
+                Raw         = $entry.Pattern
+                Regex       = [regex]::new($regex)
+                LooseRegex  = [regex]::new($regex, 'IgnoreCase')
+                Specificity = (Get-LiteralPrefix $entry.Pattern).Split('/', [StringSplitOptions]::RemoveEmptyEntries).Count
+                Exclude     = $entry.Exclude
+                Implicit    = $false
+            })
     }
     $rules.ToArray()
 }
@@ -625,17 +681,19 @@ function Test-YamlPathIncluded {
     <#
     .SYNOPSIS
         YAML trigger semantics: order does not matter; the most specific matching include or exclude
-        wins, and an exclude wins a tie.
+        wins, and an exclude wins a tie. Matching is case-sensitive unless -IgnoreCase is given.
     #>
     param(
         [Parameter(Mandatory)][string] $File,
-        [object[]] $Rules
+        [object[]] $Rules,
+        [switch] $IgnoreCase
     )
 
     $include = -1
     $exclude = -1
     foreach ($rule in $Rules) {
-        if (-not $rule.Regex.IsMatch($File)) { continue }
+        $regex = if ($IgnoreCase) { $rule.LooseRegex } else { $rule.Regex }
+        if (-not $regex.IsMatch($File)) { continue }
         if ($rule.Exclude) { $exclude = [Math]::Max($exclude, $rule.Specificity) }
         else { $include = [Math]::Max($include, $rule.Specificity) }
     }
@@ -771,6 +829,9 @@ function Test-FilterCoverage {
         if ($unmatched) {
             $detail = $item.Reason
             if ($item.Display.EndsWith('/')) { $detail += " (not included: $unmatched)" }
+            if ($Kind -eq 'Yaml' -and (Test-YamlPathIncluded -File $unmatched -Rules $Rules -IgnoreCase)) {
+                $detail += '; an entry matches it only when case is ignored, but YAML trigger paths are case-sensitive'
+            }
             $findings.Add([pscustomobject]@{ Filter = $filterName; Type = 'Missing'; Path = $item.Display; Detail = $detail })
         }
     }
@@ -788,7 +849,11 @@ function Test-FilterCoverage {
         if ($used) { continue }
 
         $prefix = Get-LiteralPrefix $rule.Raw
-        $detail = if ($prefix -and -not (Test-Path -LiteralPath (Join-Path $Root $prefix))) {
+        $caseOnly = $Kind -eq 'Yaml' -and @($targetFiles | Where-Object { $rule.LooseRegex.IsMatch($_) }).Count -gt 0
+        $detail = if ($caseOnly) {
+            'matches only when case is ignored; YAML trigger paths are case-sensitive, so use the casing of the repository'
+        }
+        elseif ($prefix -and -not (Test-Path -LiteralPath (Join-Path $Root $prefix))) {
             "matches no file: '$prefix' does not exist (moved or deleted?)"
         }
         else {

@@ -86,6 +86,5 @@ added. Name the helper folders explicitly:
 | `-BuildDefinitionId` | `Test-PathFilters.ps1` | none; the template passes `$(System.DefinitionId)` |
 | `-SkipBranchPolicy` | validation scripts | off |
 | `-AllowSuperfluous` | validation scripts | off |
-| `-ThrottleLimit` | `Test-AllPathFilters.ps1` | the number of processors |
 
 In a pipeline run, a missing access token is an error rather than a silently skipped check.

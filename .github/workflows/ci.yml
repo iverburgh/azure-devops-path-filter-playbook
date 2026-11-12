@@ -20,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The tests run one real MSBuild scan of a small generated repository.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
       - name: Install Pester
         shell: pwsh
         run: Install-Module Pester -MinimumVersion 5.5.0 -Force -Scope CurrentUser -SkipPublisherCheck

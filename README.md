@@ -108,6 +108,11 @@ All explained in [docs/pitfalls.md](docs/pitfalls.md).
   pipeline's tests without touching a single production project.
 - **Superfluous entries are drift too.** A filter entry for a removed reference keeps triggering
   builds for nothing, and an entry for a moved folder hides that the new folder is missing.
+- **YAML trigger paths are case-sensitive; branch policies are not.** A wrongly cased entry can pass
+  the pull request and never trigger after merge. Take the casing from the repository, not from a
+  `ProjectReference`.
+- **A project that cannot be read must fail the check.** Treating it as "no references" quietly
+  shrinks every scope it is part of, and every check stays green.
 
 ## Adapting this to your repository
 
@@ -124,6 +129,19 @@ decide yourself — which folders hold tests, which projects are added to everyt
   — including the path filter.
 - [Policy configurations REST API](https://learn.microsoft.com/rest/api/azure/devops/policy/configurations/list)
   — what the scripts read.
+
+## Related playbooks
+
+From the same monorepo, each on its own:
+
+- [Renovate on Azure DevOps](https://github.com/iverburgh/renovate-azure-devops-playbook) —
+  automated dependency updates. Its pull requests change project files, which is exactly what the
+  gate pipeline here checks.
+- [Copilot on Azure DevOps](https://github.com/iverburgh/copilot-azure-devops-playbook) —
+  instructions, skills and agents for a repository like this one, including how skills such as the
+  ones here are written.
+- [Azure App Configuration](https://github.com/iverburgh/azure-app-configuration-playbook) —
+  configuration as code, deployed and rolled back together with the application.
 
 ## License
 

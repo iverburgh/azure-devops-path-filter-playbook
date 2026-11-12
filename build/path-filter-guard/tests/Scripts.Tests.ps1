@@ -44,8 +44,7 @@ BeforeAll {
     }
 
     $script:AzDo = @{ CollectionUri = 'https://dev.azure.com/example/'; Project = 'Sample'; RepositoryId = 'repo-id'; AccessToken = 'token'; PolicyBranch = 'main' }
-    # Parallel runspaces cannot see Pester mocks, so the multi-pipeline script runs sequentially here.
-    $script:AllArgs = $script:AzDo + @{ ThrottleLimit = 1 }
+    $script:AllArgs = $script:AzDo
 }
 
 AfterAll {
@@ -54,7 +53,7 @@ AfterAll {
 
 Describe 'Initialize-Scope.ps1' {
     BeforeAll {
-        Mock dotnet { Get-FixtureProjectReference $args[1] } -ParameterFilter { $args[0] -eq 'list' -and $args[2] -eq 'reference' }
+        Mock dotnet { Invoke-FixtureReferenceScan $args } -ParameterFilter { $args[0] -eq 'msbuild' }
         $script:Repo = New-ScriptRepository
     }
 
@@ -90,7 +89,7 @@ Describe 'Initialize-Scope.ps1' {
 
 Describe 'Test-PathFilters.ps1' {
     BeforeAll {
-        Mock dotnet { Get-FixtureProjectReference $args[1] } -ParameterFilter { $args[0] -eq 'list' -and $args[2] -eq 'reference' }
+        Mock dotnet { Invoke-FixtureReferenceScan $args } -ParameterFilter { $args[0] -eq 'msbuild' }
     }
 
     It 'succeeds when the YAML trigger matches, without Azure DevOps access' {
@@ -141,7 +140,7 @@ Describe 'Test-PathFilters.ps1' {
 
 Describe 'Test-AllPathFilters.ps1' {
     BeforeAll {
-        Mock dotnet { Get-FixtureProjectReference $args[1] } -ParameterFilter { $args[0] -eq 'list' -and $args[2] -eq 'reference' }
+        Mock dotnet { Invoke-FixtureReferenceScan $args } -ParameterFilter { $args[0] -eq 'msbuild' }
     }
 
     It 'passes every discovered pipeline whose filters match' {

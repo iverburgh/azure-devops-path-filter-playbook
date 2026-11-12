@@ -81,11 +81,23 @@ steps:
     }
 }
 
-function Get-FixtureProjectReference {
-    param([string] $ProjectFile)
-    'Project reference(s)'
-    '--------------------'
-    Select-Xml -LiteralPath $ProjectFile -XPath '//ProjectReference/@Include' | ForEach-Object { $_.Node.Value }
+function Invoke-FixtureReferenceScan {
+    <#
+    .SYNOPSIS
+        Stands in for 'dotnet msbuild ScanProjectReferences.proj': reads the project list and writes
+        '<project>|<reference>' lines with absolute paths, as the real scan does.
+    #>
+    param([object[]] $Arguments)
+
+    $listFile = "$($Arguments | Where-Object { "$_" -like '-p:ProjectListFile=*' })".Substring('-p:ProjectListFile='.Length)
+    $outputFile = "$($Arguments | Where-Object { "$_" -like '-p:ScanOutputFile=*' })".Substring('-p:ScanOutputFile='.Length)
+    $lines = foreach ($project in [IO.File]::ReadAllLines($listFile)) {
+        foreach ($include in @(Select-Xml -LiteralPath $project -XPath '//ProjectReference/@Include' | ForEach-Object { $_.Node.Value })) {
+            "$project|$([IO.Path]::GetFullPath($include.Replace('\', '/'), (Split-Path $project -Parent)))"
+        }
+    }
+    [IO.File]::WriteAllLines($outputFile, [string[]]@($lines))
+    $global:LASTEXITCODE = 0
 }
 
 function New-FixturePolicy {

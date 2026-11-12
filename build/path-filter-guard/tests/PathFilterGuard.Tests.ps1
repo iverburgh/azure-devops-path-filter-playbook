@@ -54,6 +54,12 @@ Describe 'Test-YamlPathIncluded' {
         $rules = New-Rules -Include 'tools/**' -Exclude 'tools/*.md'
         Test-YamlPathIncluded -File 'tools/readme.md' -Rules $rules | Should -BeFalse
     }
+
+    It 'matches case-sensitively unless asked to ignore case' {
+        $rules = New-Rules -Include 'src/app/**'
+        Test-YamlPathIncluded -File 'src/App/Program.cs' -Rules $rules | Should -BeFalse
+        Test-YamlPathIncluded -File 'src/App/Program.cs' -Rules $rules -IgnoreCase | Should -BeTrue
+    }
 }
 
 Describe 'New-PolicyRule and Test-PolicyPathIncluded' {
@@ -156,7 +162,7 @@ pool:
 Describe 'Get-ProjectScope' {
     BeforeAll {
         $script:Repo = New-TestRepository
-        Mock dotnet { Get-FixtureProjectReference $args[1] } -ParameterFilter { $args[0] -eq 'list' -and $args[2] -eq 'reference' }
+        Mock dotnet { Invoke-FixtureReferenceScan $args } -ParameterFilter { $args[0] -eq 'msbuild' }
         $script:Scope = Get-ProjectScope -Project 'src/App/App.csproj' -Root $Repo.Root -Config $Repo.Config
     }
 
@@ -196,6 +202,80 @@ Describe 'Get-ProjectScope' {
     It 'adds projects that are configured as always in scope' {
         ($Scope | Where-Object Project -EQ 'tests/Analyzers.Tests/Analyzers.Tests.csproj').Kind | Should -Be 'Configured'
     }
+
+    It 'uses the casing of the repository for a reference typed in another casing' {
+        $repo = New-TestRepository
+        $app = Join-Path $repo.Root 'src/App/App.csproj'
+        Set-Content -LiteralPath $app -Value ((Get-Content -LiteralPath $app -Raw).Replace('..\Lib\Lib.csproj', '..\lib\lib.csproj'))
+        $scope = Get-ProjectScope -Project 'src/App/App.csproj' -Root $repo.Root -Config $repo.Config
+        @($scope | Where-Object Kind -EQ Dependency | ForEach-Object Project) | Should -Be @('src/App/App.csproj', 'src/Lib/Lib.csproj', 'src/Core/Core.csproj')
+    }
+
+    It 'warns about a reference to a project that is not in the repository' {
+        $repo = New-TestRepository
+        $app = Join-Path $repo.Root 'src/App/App.csproj'
+        Set-Content -LiteralPath $app -Value ((Get-Content -LiteralPath $app -Raw).Replace('..\Lib\Lib.csproj', '..\Missing\Missing.csproj'))
+        $warnings = @(Get-ProjectScope -Project 'src/App/App.csproj' -Root $repo.Root -Config $repo.Config 3>&1 |
+                Where-Object { $_ -is [Management.Automation.WarningRecord] })
+        $warnings | Should -HaveCount 1
+        $warnings[0].Message | Should -Match "'src/Missing/Missing\.csproj' is referenced but is not a project file"
+    }
+}
+
+Describe 'Invoke-ProjectReferenceScan when MSBuild fails' {
+    BeforeAll {
+        Mock dotnet { $global:LASTEXITCODE = 1; 'src/Broken/Broken.csproj : error MSB4025: The project file could not be loaded.' } -ParameterFilter { $args[0] -eq 'msbuild' }
+    }
+
+    It 'stops instead of reporting no references' {
+        $repo = New-TestRepository
+        { Initialize-ReferenceCache -Root $repo.Root } | Should -Throw '*MSBuild could not read the project references (exit code 1)*MSB4025*'
+    }
+}
+
+Describe 'Invoke-ProjectReferenceScan with the real MSBuild' -Skip:(-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    BeforeAll {
+        function New-ScanRepository([hashtable] $File) {
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            foreach ($path in $File.Keys) {
+                $full = Join-Path $root $path
+                New-Item -ItemType Directory -Path (Split-Path $full) -Force | Out-Null
+                Set-Content -LiteralPath $full -Value $File[$path]
+            }
+            $root
+        }
+    }
+
+    It 'reads references from Directory.Build.props and from multi-targeted projects' {
+        $root = New-ScanRepository @{
+            'Directory.Build.props'      = @'
+<Project>
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'Shared'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)src/Shared/Shared.csproj" />
+  </ItemGroup>
+</Project>
+'@
+            'src/App/App.csproj'         = @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFrameworks>net8.0;netstandard2.0</TargetFrameworks></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\Lib\Lib.csproj" /></ItemGroup>
+</Project>
+'@
+            'src/Lib/Lib.csproj'         = '<Project Sdk="Microsoft.NET.Sdk" />'
+            'src/Shared/Shared.csproj'   = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>'
+        }
+
+        Initialize-ReferenceCache -Root $root | Should -Be 3
+        @(Get-DirectProjectReference -Project 'src/App/App.csproj' -Root $root | Sort-Object) | Should -Be @('src/Lib/Lib.csproj', 'src/Shared/Shared.csproj')
+        @(Get-DirectProjectReference -Project 'src/Lib/Lib.csproj' -Root $root) | Should -Be @('src/Shared/Shared.csproj')
+        @(Get-DirectProjectReference -Project 'src/Shared/Shared.csproj' -Root $root) | Should -HaveCount 0
+    }
+
+    It 'fails on a project MSBuild cannot load' {
+        $root = New-ScanRepository @{ 'src/Broken/Broken.csproj' = '<Project Sdk="Microsoft.NET.Sdk">' }
+        { Invoke-ProjectReferenceScan -Project @(Join-Path $root 'src/Broken/Broken.csproj') -Root $root } |
+            Should -Throw '*MSBuild could not read the project references*'
+    }
 }
 
 Describe 'Get-ExpectedYamlPath and ConvertTo-PolicyPathFilter' {
@@ -221,7 +301,7 @@ Describe 'Get-ExpectedYamlPath and ConvertTo-PolicyPathFilter' {
 
 Describe 'Invoke-PathFilterValidation' {
     BeforeAll {
-        Mock dotnet { Get-FixtureProjectReference $args[1] } -ParameterFilter { $args[0] -eq 'list' -and $args[2] -eq 'reference' }
+        Mock dotnet { Invoke-FixtureReferenceScan $args } -ParameterFilter { $args[0] -eq 'msbuild' }
     }
 
     It 'passes when both filters cover exactly the scope' {
@@ -255,6 +335,16 @@ Describe 'Invoke-PathFilterValidation' {
         $superfluous = @($result.Findings | Where-Object Type -EQ Superfluous)
         $superfluous.Path | Should -Be @('src/Other/**', 'src/Removed/**')
         ($superfluous | Where-Object Path -EQ 'src/Removed/**').Detail | Should -Match 'does not exist'
+    }
+
+    It 'reports a YAML entry that differs from the repository only in casing' {
+        $repo = New-TestRepository -YamlInclude (@($script:DefaultInclude | Where-Object { $_ -ne 'src/Core/**' }) + 'src/core/**')
+        $result = Invoke-PathFilterValidation -Project 'src/App/App.csproj' -PipelineFile 'pipelines/app.yml' -Root $repo.Root -Config $repo.Config
+        $result.Findings | Should -HaveCount 2
+        ($result.Findings | Where-Object Type -EQ Missing).Path | Should -Be 'src/Core/'
+        ($result.Findings | Where-Object Type -EQ Missing).Detail | Should -Match 'only when case is ignored'
+        ($result.Findings | Where-Object Type -EQ Superfluous).Path | Should -Be 'src/core/**'
+        ($result.Findings | Where-Object Type -EQ Superfluous).Detail | Should -Match 'use the casing of the repository'
     }
 
     It 'does not report allowed extra paths as superfluous' {

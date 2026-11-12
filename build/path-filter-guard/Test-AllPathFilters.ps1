@@ -14,7 +14,8 @@
     passes a .csproj through the configured project parameter (default 'projectFile').
 
     Azure DevOps is read twice in total: the list of build definitions and the branch's build
-    validation policies. Project references are resolved once and shared between pipelines.
+    validation policies. Project references are read once, with one MSBuild run, and shared between
+    pipelines.
 
 .PARAMETER PolicyBranch
     The branch whose policies to check. Defaults to the pull request target branch, then the branch
@@ -25,10 +26,6 @@
 
 .PARAMETER SkipBranchPolicy
     Check only the YAML triggers.
-
-.PARAMETER ThrottleLimit
-    How many 'dotnet list reference' calls run in parallel. Defaults to the number of processors;
-    1 disables parallelism.
 
 .EXAMPLE
     ./Test-AllPathFilters.ps1 -SkipBranchPolicy
@@ -55,9 +52,7 @@ param(
 
     [switch] $AllowSuperfluous,
 
-    [switch] $SkipBranchPolicy,
-
-    [int] $ThrottleLimit = [Environment]::ProcessorCount
+    [switch] $SkipBranchPolicy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,8 +97,8 @@ if ($checkPolicy) {
 }
 
 $testProjects = @(Get-TestProject -Root $WorkingDirectory -Config $config)
-$resolved = Initialize-ReferenceCache -Root $WorkingDirectory -ThrottleLimit $ThrottleLimit
-Write-Host "Resolved the references of $resolved project(s)."
+$resolved = Initialize-ReferenceCache -Root $WorkingDirectory
+Write-Host "Read the references of $resolved project(s) with one MSBuild run."
 Write-Host "Validating $($pipelines.Count) pipeline(s); $($testProjects.Count) test project(s) considered."
 
 $summary = [Collections.Generic.List[object]]::new()

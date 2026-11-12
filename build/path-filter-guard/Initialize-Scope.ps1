@@ -12,10 +12,13 @@
 
     In an Azure Pipelines run it also sets these variables for later steps:
       ProjectsInScope  all projects, separated by ';'
-      Dependencies     the reference graph only, separated by ';'
+      Dependencies     the reference graph only, separated by ';'. Projects that are only in scope
+                       for testing (tests, test support, always in scope) are left out, so a later
+                       step can skip the deployment when a change touches none of these.
       TestProjects     the test projects, one per line (usable as 'projects' input of DotNetCoreCLI)
 
-    Needs the .NET SDK (it uses 'dotnet list reference'); no Azure DevOps access.
+    Needs the .NET SDK (it reads project references with one 'dotnet msbuild' run); no Azure
+    DevOps access.
 
 .PARAMETER ProjectFile
     The project the pipeline builds and deploys, relative to the working directory.

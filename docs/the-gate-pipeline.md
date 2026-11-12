@@ -44,9 +44,23 @@ The pipeline has `trigger: none`: it exists only to run on pull requests.
 
 ## Cost
 
-It resolves the references of every project in the repository, in parallel, and reads Azure DevOps
-twice. On a repository with around 300 projects that takes a minute or two on a hosted agent, and it
-only runs when a project file changes.
+It reads the references of every project in the repository with one MSBuild run, and reads Azure
+DevOps twice. On the repository this was built on, replacing one `dotnet list reference` call per
+project with that single run cut the gate from about three and a half minutes to about one. It only
+runs when a project file, a pipeline or the guard itself changes.
+
+## A home for other repository-wide checks
+
+The gate runs on exactly the changes that can break the project graph, and is already required. That
+makes it the natural place for other checks with the same trigger — rather than another pipeline and
+another branch policy. Examples:
+
+- **Solution coverage.** Every project is in the solution file, so a solution-wide restore, build or
+  IDE refactoring includes it.
+- **Project conventions.** No `ProjectReference` from production code into a test folder; every test
+  project matches `testProjectPattern`.
+
+Add each as a separate step, so the log shows which check failed.
 
 ## When it fails
 

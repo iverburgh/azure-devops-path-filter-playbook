@@ -28,6 +28,27 @@ including folders". The guard warns and treats it as `*`.
 `src/Orders/*` without a leading slash is not a valid branch policy entry. The guard warns and
 ignores it — as a pipeline would.
 
+### Write folders in a branch policy as `/folder/*`
+
+The [branch policy documentation](https://learn.microsoft.com/azure/devops/repos/git/branch-policies#use-path-filters-with-branch-policies)
+only shows folders with a trailing `/*` and files with their full path; it does not say what an entry
+without a wildcard, such as `/src/Orders`, matches. The guard reads it as that path and everything
+below it, like a YAML trigger path. Do not rely on that: the printed filter always uses `/*`, so
+copy it as is.
+
+### YAML trigger paths are case-sensitive
+
+The [trigger documentation](https://learn.microsoft.com/azure/devops/pipelines/repos/azure-repos-git#paths)
+says so: use the same casing as the real folders. Branch policies are
+[not case-sensitive](https://learn.microsoft.com/azure/devops/repos/git/branch-policies#are-the-required-code-reviewer-paths-case-sensitive). So
+`src/orders/**` in YAML can look fine, pass a pull request through the branch policy, and still
+never trigger after merge. You may find that a wrongly cased entry happens to work today; treat the
+documented behaviour as the contract.
+
+The casing usually comes from a `ProjectReference` typed in another casing than the folder on disk —
+Windows does not care, so nobody notices. The guard takes the casing from the repository, and reports
+an entry that differs only in casing as both missing and superfluous, with a note saying why.
+
 ### Fixing the YAML is half the fix
 
 The YAML trigger decides whether a pipeline runs after merge. The branch policy decides whether it
@@ -92,6 +113,44 @@ When a folder moves, the old entry matches nothing and the new folder is in no f
 missing entries shows half of that; reporting the superfluous one too, with "does not exist", tells
 you it moved.
 
+### A project that cannot be read must fail the check
+
+The first version asked `dotnet list reference` per project and treated a failed call as "no
+references". A project file with a merge conflict marker or a typo then silently dropped out of
+every graph — with its own references — and every check passed with a smaller scope. The MSBuild scan
+fails the whole run instead, with the MSBuild error. A reference to a project that is not in the
+repository gives a warning.
+
+## Reading references with MSBuild
+
+One `dotnet msbuild` run over `lib/ScanProjectReferences.proj` evaluates every project, which is
+several times faster than one `dotnet list reference` call per project. It injects a small target
+into each project through MSBuild's extension points. Things to know if you change it:
+
+### Multi-targeted projects need the cross-targeting hook
+
+A project with `<TargetFrameworks>` (plural) is first evaluated without a target framework, and that
+evaluation does not import `CustomAfterMicrosoftCommonTargets`. The injected target is then missing
+and MSBuild fails with MSB4057. The scan sets `CustomAfterMicrosoftCommonCrossTargetingTargets` to
+the same file.
+
+### References that depend on the target framework are not seen
+
+For a multi-targeted project the scan reads the outer evaluation, so a `ProjectReference` with a
+condition on `$(TargetFramework)` is not in the result. Put such a project in
+`alwaysInScopeProjects`, or make the reference unconditional.
+
+### The scan overrides your own extension point
+
+If your repository already sets `CustomAfterMicrosoftCommonTargets` (or the cross-targeting
+variant), the scan replaces it for its own run. That only matters if your file adds project
+references; then those are not seen.
+
+### Run it from the repository root
+
+So `global.json` selects the same SDK as your build. No restore is needed: evaluation does not need
+packages.
+
 ## Azure DevOps API
 
 ### Read policies per repository and branch
@@ -112,17 +171,7 @@ green forever. In a pipeline run the guard throws instead; locally it warns and 
 
 ## PowerShell
 
-### `dotnet list reference` prints backslashes on Linux
-
-Project files store references with `\`. On a Linux agent `GetFullPath` treats a backslash as part of
-a file name, and every reference resolves to a path that does not exist. Normalise to `/` first.
-
 ### One-element arrays unroll
 
 `$files = if ($folder) { @(Get-ChildItem ...) }` gives a string, not an array, when there is one file,
 and `.Count` then fails under strict mode. Wrap the whole expression: `@(if (...) { ... })`.
-
-### Parallel runspaces do not see Pester mocks
-
-`ForEach-Object -Parallel` runs in fresh runspaces. The guard resolves references in parallel for
-speed; the tests pass `-ThrottleLimit 1`, which takes the sequential, mockable path.

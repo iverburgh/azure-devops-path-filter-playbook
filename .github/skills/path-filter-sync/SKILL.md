@@ -60,6 +60,8 @@ When you edit by hand:
 - use `**` — a single `*` does **not** cross folders in a YAML trigger, so
   `'tests/Orders.Tests/*'` misses `tests/Orders.Tests/Helpers/Fixture.cs`;
 - forward slashes, single quotes, no leading slash;
+- the exact casing of the folder in the repository — YAML trigger paths are case-sensitive, and a
+  `ProjectReference` may be typed in another casing;
 - remove entries reported as superfluous, unless they are listed in `allowedExtraPaths`.
 
 ## Step 3 — Tell the user about the branch policy
@@ -88,3 +90,5 @@ the branch policy is updated.
   nobody thinks of. Trust the script, not intuition.
 - A project added to every project through `Directory.Build.props` (an analyzer, for example) belongs
   in `ignoredReferences`, or every pipeline would list it.
+- If the guard stops with "MSBuild could not read the project references", fix the project file it
+  names first (a merge conflict marker, an unclosed element); the scope cannot be trusted until then.

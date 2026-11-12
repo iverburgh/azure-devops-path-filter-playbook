@@ -1,0 +1,40 @@
+<Project>
+
+  <!--
+    Reads the direct project references of many projects in one MSBuild run. Starting MSBuild once,
+    instead of once per project, is what keeps the path filter guard fast in a large repository.
+
+    Global properties:
+      ProjectListFile  text file with one absolute project path per line
+      ScanOutputFile   receives one '<project>|<referenced project>' line per reference (absolute paths)
+
+    Called by Invoke-ProjectReferenceScan in PathFilterGuard.ps1. Nothing is restored or built: the
+    target below only evaluates each project and returns its ProjectReference items.
+  -->
+
+  <Target Name="ScanProjectReferences">
+    <Error Condition="'$(ProjectListFile)' == '' Or '$(ScanOutputFile)' == ''"
+           Text="Set both ProjectListFile and ScanOutputFile." />
+
+    <ReadLinesFromFile File="$(ProjectListFile)">
+      <Output TaskParameter="Lines" ItemName="_PathFilterGuardProject" />
+    </ReadLinesFromFile>
+
+    <!--
+      The listing target lives in a separate file that only this run imports, through the hooks that
+      Microsoft.Common.targets (single target framework) and Microsoft.Common.CrossTargeting.targets
+      (several target frameworks) provide. Regular builds never see it.
+    -->
+    <MSBuild Projects="@(_PathFilterGuardProject)"
+             Targets="PathFilterGuardListProjectReferences"
+             Properties="CustomAfterMicrosoftCommonTargets=$(MSBuildThisFileDirectory)ListProjectReferences.targets;CustomAfterMicrosoftCommonCrossTargetingTargets=$(MSBuildThisFileDirectory)ListProjectReferences.targets"
+             BuildInParallel="true">
+      <Output TaskParameter="TargetOutputs" ItemName="_PathFilterGuardReference" />
+    </MSBuild>
+
+    <WriteLinesToFile File="$(ScanOutputFile)"
+                      Lines="@(_PathFilterGuardReference->'%(ReferencingProject)|%(Identity)')"
+                      Overwrite="true" />
+  </Target>
+
+</Project>

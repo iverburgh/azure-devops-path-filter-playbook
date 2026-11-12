@@ -5,8 +5,9 @@ Step 5 — fixing the filters the first run finds — depends on how far they ha
 
 ## 1. Check the prerequisites
 
-- **SDK-style `.csproj` files.** References are read with `dotnet list reference`, which evaluates
-  MSBuild, so references added in `Directory.Build.props` are seen too.
+- **SDK-style `.csproj` files.** References are read by evaluating every project with one
+  `dotnet msbuild` run, so references added in `Directory.Build.props` are seen too. Every project
+  must be loadable: one MSBuild cannot evaluate fails the check.
 - **PowerShell 7.2 or newer** on the agents (`pwsh: true` in the tasks) and locally.
 - **The .NET SDK** on the agents, before the guard runs. `UseDotNet@2` with `useGlobalJson: true` is
   enough; no restore is needed.
@@ -71,7 +72,9 @@ steps:
 The first step prints the scope and the filters on every run — also on green builds, so the right
 values are always one click away. It sets `$(TestProjects)`, `$(Dependencies)` and
 `$(ProjectsInScope)` for later steps; `$(TestProjects)` is a ready-made `projects` input for
-`DotNetCoreCLI@2` that runs only the tests covering this pipeline.
+`DotNetCoreCLI@2` that runs only the tests covering this pipeline, and `$(Dependencies)` can tell a
+later step that a change only touched tests — see
+[using the scope beyond triggers](how-it-works.md#using-the-scope-beyond-triggers).
 
 The second step validates both filters and fails the build on anything missing or superfluous. It
 reads the branch policy with the job access token; see [the example pipeline](../pipelines/orders-api.yml).

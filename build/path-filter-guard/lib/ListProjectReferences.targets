@@ -1,0 +1,15 @@
+<Project>
+
+  <!--
+    Imported only by ScanProjectReferences.proj. Returns the project's evaluated ProjectReference
+    items (so references added by Directory.Build.props or Directory.Build.targets count too) as
+    absolute paths, each tagged with the project that holds the reference.
+  -->
+  <Target Name="PathFilterGuardListProjectReferences" Returns="@(_PathFilterGuardListedReference)">
+    <ItemGroup>
+      <_PathFilterGuardListedReference Include="@(ProjectReference->'%(FullPath)')"
+                                       ReferencingProject="$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

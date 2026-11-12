@@ -17,8 +17,14 @@ Plus the **required paths** from `requiredPaths`: the pipeline file itself, `Dir
 
 A few decisions behind this:
 
-- **References are read with `dotnet list reference`**, not by parsing XML, so references added by
-  `Directory.Build.props` or conditions are seen as MSBuild sees them.
+- **References are read by MSBuild itself**, not by parsing XML, so references added by
+  `Directory.Build.props` or conditions are seen as MSBuild sees them. One `dotnet msbuild` run
+  evaluates every project in the repository (`lib/ScanProjectReferences.proj`); nothing is restored
+  or built. A project MSBuild cannot evaluate fails the run, instead of silently contributing no
+  references.
+- **Paths take the casing of the repository**, not the casing someone typed in a `ProjectReference`.
+  YAML trigger paths are case-sensitive, so a filter copied from the output must match the real
+  folders.
 - **The graph is walked breadth-first**, so the reason shown for a dependency is its shortest chain.
 - **Tests are selected by direct reference.** A test that references `Orders.Domain` covers the
   pipeline that uses `Orders.Domain`. A test that only references something `Orders.Domain` uses
@@ -62,6 +68,7 @@ does:
 | `**` | across folders | not meant to be used; treated as `*` with a warning |
 | `?` | one character within a folder | one character |
 | Path without wildcard | that path and everything below it | that path and everything below it |
+| Casing | **case-sensitive** | case-insensitive |
 | Exclude | `exclude:` list | prefix `!` |
 | Conflicts | the most specific entry wins; an exclude wins a tie; order does not matter | entries apply in order; the last match wins |
 | No includes | everything is included | everything not excluded is included |
@@ -82,6 +89,9 @@ Superfluous entries fail the build too, unless you pass `-AllowSuperfluous` or l
 `allowedExtraPaths`. They are cheaper than missing ones — an extra build, not a missed one — but they
 are drift all the same, and they accumulate.
 
+An entry that differs from the repository only in casing is reported on both sides: the folder as
+missing and the entry as superfluous, each with a note that YAML trigger paths are case-sensitive.
+
 ## What is not checked
 
 - Files outside every project folder that a build still uses: shared pipeline templates, a
@@ -100,6 +110,35 @@ are drift all the same, and they accumulate.
 | `Test-PathFilters.ps1` | every pipeline, and locally | for the branch policy check | yes, for that pipeline's filters |
 | `Test-AllPathFilters.ps1` | the gate pipeline, and locally | for the branch policy check | yes, for any pipeline's filters |
 
-All three share `lib/PathFilterGuard.ps1`. `Test-AllPathFilters.ps1` resolves every project's
-references once, in parallel, and reads Azure DevOps twice in total: the list of build definitions
-and the branch's build validation policies.
+All three share `lib/PathFilterGuard.ps1`. `Test-AllPathFilters.ps1` reads every project's
+references once, with one MSBuild run, and reads Azure DevOps twice in total: the list of build
+definitions and the branch's build validation policies.
+
+## Using the scope beyond triggers
+
+`Initialize-Scope.ps1` sets three pipeline variables. Two of them answer questions other than "when
+should this pipeline run?":
+
+- **`TestProjects`** runs only the tests that cover this project and its dependencies — the sample
+  pipeline passes it to the test task.
+- **`Dependencies`** holds only the reference graph: the projects that end up in the deployed
+  output. Tests, test support and always-in-scope projects are left out on purpose. A run whose
+  changes touch none of these folders, nor a required path such as `global.json`, only changed
+  tests: it still has to build and test, but it has nothing new to deploy. Comparing the changed
+  files of the run with these folders lets a later step skip the deployment.
+
+The variables are plain pipeline variables, available to later steps of the same job. To use one in
+a condition of another job or stage, publish it again as an output variable.
+
+## Ideas for later
+
+Not part of this playbook, but natural next steps once the guard is in place:
+
+- **Infrastructure dependencies.** The scope covers .NET projects. Pipelines that also deploy
+  infrastructure templates could get the same treatment for the modules those templates use.
+- **A pre-commit hook** that runs `Initialize-Scope.ps1` for pipelines whose projects changed, so
+  drift shows up before the pull request.
+- **Updating the branch policy automatically.** The scripts print the filter; a service connection
+  with permission to edit policies could apply it. That trades a manual, reviewed step for a
+  pipeline that can change what every open pull request is validated against — see
+  [Working with Copilot](working-with-copilot.md) for why this playbook keeps it manual.
