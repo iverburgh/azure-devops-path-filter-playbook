@@ -142,6 +142,9 @@ From the same monorepo, each on its own:
   ones here are written.
 - [Azure App Configuration](https://github.com/iverburgh/azure-app-configuration-playbook) —
   configuration as code, deployed and rolled back together with the application.
+- [Domain-Driven Design in .NET](https://github.com/iverburgh/ddd-dotnet-playbook) — bounded
+  contexts with their own projects and dependencies: the structure that makes per-context path
+  filters possible.
 
 ## License
 
