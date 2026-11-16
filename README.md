@@ -147,6 +147,8 @@ From the same monorepo, each on its own:
   filters possible.
 - [Entra ID app registrations as code](https://github.com/iverburgh/entra-app-registrations-as-code-playbook) —
   app registrations, roles and access as code, applied by a pipeline like the ones here.
+- [Circuit breakers on Azure Functions](https://github.com/iverburgh/azure-functions-circuit-breaker-playbook) —
+  a shared circuit breaker for the dependencies of the apps these pipelines deploy.
 
 ## License
 
