@@ -149,6 +149,10 @@ From the same monorepo, each on its own:
   app registrations, roles and access as code, applied by a pipeline like the ones here.
 - [Circuit breakers on Azure Functions](https://github.com/iverburgh/azure-functions-circuit-breaker-playbook) —
   a shared circuit breaker for the dependencies of the apps these pipelines deploy.
+- [HTTP resilience in .NET](https://github.com/iverburgh/dotnet-http-resilience-playbook) —
+  retries, timeouts and outbound throttling for `HttpClient`.
+- [OpenTelemetry observability in .NET](https://github.com/iverburgh/dotnet-opentelemetry-observability-playbook) —
+  traces, metrics and logs in one trace across HTTP, queues and an outbox.
 
 ## License
 
